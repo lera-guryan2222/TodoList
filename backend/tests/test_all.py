@@ -1,10 +1,11 @@
 import pytest
-from app import crud, schemas
-from app.database import Base
-from app.main import app
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+from app import crud, schemas
+from app.database import Base
+from app.main import app
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 engine = create_engine(
@@ -15,10 +16,8 @@ TestingSessionLocal = sessionmaker(
     autocommit=False, autoflush=False, bind=engine
 )
 
-client = TestClient(app)
 
-
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def setup_database():
     Base.metadata.create_all(bind=engine)
     yield
@@ -34,19 +33,34 @@ def db_session():
         db.close()
 
 
+@pytest.fixture
+def client():
+    from app.database import get_db
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    return TestClient(app)
+
+
 class TestTasksAPI:
-    def test_root(self):
+    def test_root(self, client):
         response = client.get("/")
         assert response.status_code == 200
         assert "message" in response.json()
 
-    def test_health_check(self):
+    def test_health_check(self, client):
         response = client.get("/health/")
         assert response.status_code == 200
         assert response.json()["status"] == "healthy"
         assert response.json()["database"] == "connected"
 
-    def test_create_task(self):
+    def test_create_task(self, client):
         response = client.post(
             "/tasks/",
             json={
@@ -61,7 +75,7 @@ class TestTasksAPI:
         assert data["completed"] is False
         assert "id" in data
 
-    def test_get_tasks(self):
+    def test_get_tasks(self, client):
         client.post("/tasks/", json={"title": "Task 1"})
         client.post("/tasks/", json={"title": "Task 2"})
         response = client.get("/tasks/")
@@ -69,21 +83,21 @@ class TestTasksAPI:
         assert isinstance(response.json(), list)
         assert len(response.json()) == 2
 
-    def test_get_task_by_id(self):
+    def test_get_task_by_id(self, client):
         create_response = client.post("/tasks/", json={"title": "Get Test"})
         task_id = create_response.json()["id"]
         response = client.get(f"/tasks/{task_id}")
         assert response.status_code == 200
         assert response.json()["title"] == "Get Test"
 
-    def test_update_task(self):
+    def test_update_task(self, client):
         create_response = client.post("/tasks/", json={"title": "Update Test"})
         task_id = create_response.json()["id"]
         response = client.put(f"/tasks/{task_id}", json={"completed": True})
         assert response.status_code == 200
         assert response.json()["completed"] is True
 
-    def test_delete_task(self):
+    def test_delete_task(self, client):
         create_response = client.post("/tasks/", json={"title": "Delete Test"})
         task_id = create_response.json()["id"]
         response = client.delete(f"/tasks/{task_id}")
@@ -91,7 +105,7 @@ class TestTasksAPI:
         get_response = client.get(f"/tasks/{task_id}")
         assert get_response.status_code == 404
 
-    def test_get_nonexistent_task(self):
+    def test_get_nonexistent_task(self, client):
         response = client.get("/tasks/99999")
         assert response.status_code == 404
         assert response.json()["detail"] == "Задача не найдена"
@@ -144,3 +158,4 @@ class TestCRUD:
     def test_delete_nonexistent_task(self, db_session):
         result = crud.TaskCRUD.delete_task(db_session, 99999)
         assert result is False
+        
