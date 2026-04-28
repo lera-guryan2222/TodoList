@@ -1,10 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import crud, schemas
-from app.database import Base, get_db
+from app.database import Base, get_db, engine as app_engine
 from app.main import app
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
@@ -29,8 +29,11 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def setup_database():
     Base.metadata.create_all(bind=engine)
+    # Также создаём таблицы в основном engine для health_check
+    Base.metadata.create_all(bind=app_engine)
     yield
     Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=app_engine)
 
 
 def test_root():
@@ -42,11 +45,8 @@ def test_root():
 def test_health_check():
     response = client.get("/health/")
     assert response.status_code == 200
-    assert "status" in response.json()
-    from app.database import engine
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
     assert response.json()["status"] == "healthy"
+    assert response.json()["database"] == "connected"
 
 
 def test_create_task():
